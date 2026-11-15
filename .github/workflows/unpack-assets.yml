@@ -1,0 +1,75 @@
+name: Unpack 3D assets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'صور 3 d.zip'
+      - '.github/workflows/unpack-assets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract safe asset files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+          import shutil
+
+          archive = Path("صور 3 d.zip")
+          destination = Path("assets/imported-3d")
+          allowed = {".glb", ".gltf", ".bin", ".png", ".jpg", ".jpeg", ".webp",
+                     ".ktx", ".ktx2", ".hdr", ".exr", ".obj", ".mtl", ".fbx",
+                     ".blend", ".dae", ".stl", ".wav", ".mp3"}
+          max_total = 300 * 1024 * 1024
+          total = 0
+          extracted = 0
+
+          if not archive.is_file():
+              raise SystemExit("Archive not found: " + str(archive))
+
+          with ZipFile(archive) as z:
+              for info in z.infolist():
+                  name = info.filename.replace("\\\\", "/")
+                  p = PurePosixPath(name)
+                  if info.is_dir() or name.startswith("/") or ".." in p.parts:
+                      continue
+                  if "__MACOSX" in p.parts or p.name.startswith("."):
+                      continue
+                  if p.suffix.lower() not in allowed:
+                      continue
+                  total += info.file_size
+                  if total > max_total:
+                      raise SystemExit("Archive exceeds the 300 MB extraction limit")
+                  target = destination.joinpath(*p.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  with z.open(info) as src, target.open("wb") as dst:
+                      shutil.copyfileobj(src, dst)
+                  extracted += 1
+
+          print(f"Extracted {extracted} asset files ({total} bytes) to {destination}")
+          if extracted == 0:
+              raise SystemExit("No supported 3D model or texture files were found")
+          PY
+
+      - name: Commit extracted assets
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/imported-3d
+          if git diff --cached --quiet; then
+            echo "No new asset changes to commit."
+          else
+            git commit -m "Extract uploaded 3D assets"
+            git push
+          fi
